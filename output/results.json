@@ -1,0 +1,34 @@
+[
+  {
+    "id": "t-general",
+    "result": "Neil Armstrong, 1969."
+  },
+  {
+    "id": "t-math",
+    "result": "30"
+  },
+  {
+    "id": "t-sentiment",
+    "result": "Negative: Negative. The review cites specific issues (late arrival, damaged product) and explicitly states disappointment."
+  },
+  {
+    "id": "t-summary",
+    "result": "Artificial intelligence is rapidly transforming global industries through automation and innovation, but it continues to face critical ethical challenges regarding bias, transparency, and job displacement."
+  },
+  {
+    "id": "t-ner",
+    "result": "{\"persons\": [], \"organizations\": [], \"locations\": [], \"dates\": []}"
+  },
+  {
+    "id": "t-codedebug",
+    "result": "def add_item(item, items=None):\n    if items is None:\n        items = []\n    items.append(item)\n    return items"
+  },
+  {
+    "id": "t-codegen",
+    "result": "def fibonacci_upto(n: int) -> list[int]:\n    \"\"\"Return a list of Fibonacci numbers less than or equal to n.\"\"\"\n    if n < 0:\n        raise ValueError(\"n must be non‑negative\")\n    seq = []\n    a, b = 0, 1\n    while a <= n:\n        seq.append(a)\n        a, b = b, a + b\n    return seq"
+  },
+  {
+    "id": "t-logic",
+    "result": "23 chickens, 12 rabbits."
+  }
+]
