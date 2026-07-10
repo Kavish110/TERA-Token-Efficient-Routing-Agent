@@ -37,6 +37,7 @@ export INPUT_FILE=${INPUT_FILE:-input/tasks.json}
 export OUTPUT_FILE=${OUTPUT_FILE:-output/results.json}
 export LOCAL_GEMMA_PATH="$LOCAL_MODEL_PATH"
 
+
 # Run pipeline and capture log output to both console and a temp log file
 LOG_FILE="output/test_run.log"
 echo "Starting TERA pipeline execution..."
