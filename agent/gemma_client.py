@@ -141,3 +141,34 @@ class GemmaClient:
         except Exception as exc:
             logger.error("Local Gemma reasoning hints generation failed: %s", exc)
             return ""
+
+    def generate_answer(self, prompt: str, task_type: str) -> str:
+        """Queries local Gemma to generate the final answer directly.
+
+        Args:
+            prompt: The user task prompt.
+            task_type: The classified task type.
+
+        Returns:
+            The generated final answer.
+        """
+        if not self.llm:
+            raise RuntimeError("Local Gemma model is not loaded.")
+
+        from .prompts import build_prompt
+
+        formatted_prompt = build_prompt(prompt, task_type)
+        # Wrap in Gemma conversation format
+        gemma_prompt = f"<start_of_turn>user\n{formatted_prompt}<end_of_turn>\n<start_of_turn>model\n"
+
+        try:
+            response = self.llm(
+                gemma_prompt,
+                max_tokens=512,
+                temperature=0.0,
+                stop=["<end_of_turn>"],
+            )
+            return response["choices"][0]["text"].strip()
+        except Exception as exc:
+            logger.error("Local Gemma answer generation failed: %s", exc)
+            raise
