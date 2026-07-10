@@ -19,12 +19,23 @@ else
     exit 1
 fi
 
-# Ensure output directory exists
-mkdir -p output
+# Ensure output and models directories exist
+mkdir -p output models
+
+# Download the Gemma 4 E4B GGUF model locally if it does not exist
+LOCAL_MODEL_PATH="models/local_model.gguf"
+if [ ! -f "$LOCAL_MODEL_PATH" ]; then
+    echo "Gemma 4 E4B model not found locally at $LOCAL_MODEL_PATH."
+    echo "Downloading model (~5.1 GB)... This might take a few minutes."
+    curl -L -o "$LOCAL_MODEL_PATH" \
+        "https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF/resolve/main/google_gemma-4-E4B-it-Q4_K_M.gguf?download=true"
+    echo "Model downloaded successfully."
+fi
 
 # Set local paths for test runs
 export INPUT_FILE=${INPUT_FILE:-input/tasks.json}
 export OUTPUT_FILE=${OUTPUT_FILE:-output/results.json}
+export LOCAL_GEMMA_PATH="$LOCAL_MODEL_PATH"
 
 # Run pipeline and capture log output to both console and a temp log file
 LOG_FILE="output/test_run.log"

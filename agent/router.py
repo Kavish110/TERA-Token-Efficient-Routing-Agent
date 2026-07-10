@@ -6,6 +6,8 @@ from enum import Enum
 import re
 from typing import Final
 
+from .gemma_client import GemmaClient
+
 
 class TaskType(str, Enum):
     """Supported task categories for routing."""
@@ -49,12 +51,31 @@ def normalize_task_type(task_type: TaskType | str) -> TaskType:
     return TaskType.GENERAL
 
 
-def route(prompt: str) -> TaskType:
-    """Route a prompt to the most likely task type using simple keyword heuristics."""
+def route(prompt: str, gemma_client: GemmaClient | None = None) -> TaskType:
+    """Route a prompt to the most likely task type.
 
+    Uses a local Gemma model if available, otherwise falls back to keyword heuristics.
+    """
     if not prompt:
         return TaskType.GENERAL
 
+    # Attempt local Gemma routing first
+    if gemma_client and gemma_client.is_available():
+        try:
+            raw_classification = gemma_client.classify_task(prompt)
+            cleaned = raw_classification.strip().upper()
+            if cleaned.startswith("TASKTYPE."):
+                cleaned = cleaned.split(".", 1)[1]
+            if cleaned.startswith("TASKTYPE"):
+                cleaned = cleaned[len("TASKTYPE") :].lstrip(".")
+            for t in TaskType:
+                if t.value == cleaned:
+                    return t
+        except Exception:
+            # Fall back to keywords on error
+            pass
+
+    # Keyword heuristics fallback
     normalized = re.sub(r"\s+", " ", prompt.lower()).strip()
     for task_type, keywords in _KEYWORDS:
         if any(keyword in normalized for keyword in keywords):

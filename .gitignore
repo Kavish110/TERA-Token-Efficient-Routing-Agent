@@ -6,3 +6,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 output/
+docker-compose.yml
+tera-agent.tar.gz
+models/local_model.gguf

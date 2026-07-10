@@ -10,9 +10,10 @@ import time
 
 from agent.formatter import format_response
 from agent.prompts import build_prompt
-from agent.router import normalize_task_type, route
+from agent.router import normalize_task_type, route, TaskType
 from agent.fireworks_client import FireworksClient
 from agent.model_selector import ModelSelector
+from agent.gemma_client import GemmaClient
 from config import Config
 
 # Configure logging to standard output
@@ -36,12 +37,13 @@ def run_pipeline() -> None:
         logger.critical("Configuration initialization failed: %s", exc)
         sys.exit(1)
 
-    # Initialize client and selector
+    # Initialize client, model selector, and local Gemma client
     client = FireworksClient(
         api_key=config.api_key,
         base_url=config.base_url,
     )
     model_selector = ModelSelector(allowed_models=config.allowed_models)
+    gemma_client = GemmaClient()
 
     # Determine input and output file paths (allowing env overrides for local testing)
     input_path = os.environ.get("INPUT_FILE", "/input/tasks.json")
@@ -72,7 +74,7 @@ def run_pipeline() -> None:
             continue
 
         # Extract task properties with sensible fallbacks
-        task_id = task.get("id") or task.get("task_id") or f"task-{index}"
+        task_id = task.get("task_id") or task.get("id") or f"task-{index}"
         prompt = task.get("prompt") or task.get("input") or task.get("text") or task.get("question")
         requested_format = task.get("requested_format") or task.get("format")
 
@@ -85,27 +87,25 @@ def run_pipeline() -> None:
 
         try:
             # Step 1: Routing (task classification)
-            raw_category = task.get("task_type") or task.get("category")
-            if raw_category:
-                task_type = normalize_task_type(raw_category)
-                logger.info(
-                    "Task '%s' pre-classified as '%s'. Normalized to '%s'.",
-                    task_id, raw_category, task_type.value
-                )
-            else:
-                task_type = route(prompt)
-                logger.info(
-                    "Routed task '%s' to category '%s' using heuristics.",
-                    task_id, task_type.value
-                )
+            task_type = route(prompt, gemma_client=gemma_client)
+            logger.info(
+                "Routed task '%s' to category '%s' using local classifier/heuristics.",
+                task_id, task_type.value
+            )
 
             # Step 2: Model Selection
             model = model_selector.get_model_for_task(task_type)
 
-            # Step 3: Prompt Building
-            prompt_str = build_prompt(prompt, task_type)
+            # Step 3: Local reasoning hints (for Math/Logic tasks to save remote completion tokens)
+            hints = None
+            if task_type in {TaskType.MATH, TaskType.LOGIC} and gemma_client.is_available():
+                logger.info("Generating local reasoning hints using Gemma for task '%s'...", task_id)
+                hints = gemma_client.generate_reasoning_hints(prompt)
 
-            # Step 4: Call API Client
+            # Step 4: Prompt Building (incorporating local hints if available)
+            prompt_str = build_prompt(prompt, task_type, hints=hints)
+
+            # Step 5: Call API Client
             messages = [{"role": "user", "content": prompt_str}]
             response_data = client.chat_completion(
                 model=model,
@@ -118,7 +118,7 @@ def run_pipeline() -> None:
 
             raw_output = choices[0].get("message", {}).get("content", "")
 
-            # Step 5: Formatting Response
+            # Step 6: Formatting Response
             formatted_output = format_response(
                 task_type=task_type,
                 output=raw_output,
@@ -138,8 +138,8 @@ def run_pipeline() -> None:
             )
 
             results.append({
-                "id": task_id,
-                "result": formatted_output
+                "task_id": task_id,
+                "answer": formatted_output
             })
 
         except Exception as exc:

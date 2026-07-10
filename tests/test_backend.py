@@ -152,8 +152,8 @@ def test_pipeline_execution(tmp_path) -> None:
     output_file = tmp_path / "results.json"
 
     tasks = [
-        {"id": "t1", "prompt": "Classify sentiment: Great product!", "category": "SENTIMENT"},
-        {"id": "t2", "prompt": "Solve: 2 + 2", "category": "MATH"},
+        {"task_id": "t1", "prompt": "Classify sentiment: Great product!", "category": "SENTIMENT"},
+        {"task_id": "t2", "prompt": "Solve: 2 + 2", "category": "MATH"},
     ]
 
     with open(input_file, "w", encoding="utf-8") as f:
@@ -187,5 +187,5 @@ def test_pipeline_execution(tmp_path) -> None:
         results = json.load(f)
 
     assert len(results) == 2
-    assert results[0]["id"] == "t1"
-    assert results[1]["id"] == "t2"
+    assert results[0]["task_id"] == "t1"
+    assert results[1]["task_id"] == "t2"
