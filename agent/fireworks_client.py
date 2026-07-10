@@ -64,6 +64,23 @@ class FireworksClient:
         Raises:
             RuntimeError: If request fails after all retry attempts.
         """
+        # Compress messages via headroom context compression to save prompt tokens
+        try:
+            from headroom import compress
+            logger.info("Compressing prompt context using headroom for model '%s'...", model)
+            compressed_result = compress(messages, model=model)
+            compressed_messages = compressed_result.messages
+            original_chars = sum(len(m["content"]) for m in messages)
+            compressed_chars = sum(len(m["content"]) for m in compressed_messages)
+            logger.info(
+                "Headroom compression completed. Original character count: %d -> Compressed: %d",
+                original_chars,
+                compressed_chars
+            )
+            messages = compressed_messages
+        except Exception as exc:
+            logger.warning("Headroom compression unavailable or failed: %s. Using uncompressed prompt.", exc)
+
         url = f"{self.base_url}/chat/completions"
         payload: dict[str, Any] = {
             "model": model,

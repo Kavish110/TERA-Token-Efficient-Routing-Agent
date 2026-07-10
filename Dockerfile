@@ -10,7 +10,22 @@ WORKDIR /app
 
 # Copy the requirements file and install dependencies
 COPY requirements.txt .
+
+# Install build dependencies, download tools, and clean up apt cache
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    python3-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install python requirements (compiles llama-cpp-python)
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Create models directory and download Gemma 4 E4B GGUF model
+RUN mkdir -p /app/models && \
+    curl -L -o /app/models/local_model.gguf \
+    "https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF/resolve/main/google_gemma-4-E4B-it-Q4_K_M.gguf?download=true"
 
 # Copy application source code
 COPY config.py .

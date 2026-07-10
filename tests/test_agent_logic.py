@@ -7,6 +7,7 @@ from agent.formatter import format_response
 from agent.prompts import build_prompt, get_instruction, UNIVERSAL_SYSTEM_PROMPT
 from agent.router import TaskType, route
 from agent.evaluator import evaluate_ner, evaluate_sentiment
+from agent.gemma_client import GemmaClient
 
 
 def test_routing_keywords():
@@ -53,3 +54,13 @@ def test_evaluator_metrics_are_computed():
 def test_sentiment_evaluator_uses_label_only():
     result = evaluate_sentiment(["Positive: good"], ["Positive"], ["prompt"], ["completion"])
     assert result.accuracy == 1.0
+
+
+def test_gemma_client_fallback():
+    client = GemmaClient(model_path="nonexistent.gguf")
+    assert not client.is_available()
+
+
+def test_routing_with_gemma_fallback():
+    client = GemmaClient(model_path="nonexistent.gguf")
+    assert route("Summarize this article", gemma_client=client) == TaskType.SUMMARY

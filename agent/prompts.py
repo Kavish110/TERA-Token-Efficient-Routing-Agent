@@ -32,8 +32,18 @@ def get_instruction(task_type: TaskType | str) -> str:
     return _TASK_INSTRUCTIONS.get(normalized, _TASK_INSTRUCTIONS[TaskType.GENERAL])
 
 
-def build_prompt(user_prompt: str, task_type: TaskType | str) -> str:
+def build_prompt(user_prompt: str, task_type: TaskType | str, hints: str | None = None) -> str:
     """Build a compact prompt for the model using the universal system prompt."""
 
     instruction = get_instruction(task_type)
+    if hints:
+        hint_section = (
+            f"\nUse the following local reasoning hints to help formulate your response:\n"
+            f"--- REASONING HINTS ---\n"
+            f"{hints.strip()}\n"
+            f"-----------------------\n"
+            f"Directly output the concise answer based on these hints."
+        )
+        return f"{UNIVERSAL_SYSTEM_PROMPT}\n{instruction}\n{hint_section}\n\nUser: {user_prompt.strip()}"
+
     return f"{UNIVERSAL_SYSTEM_PROMPT}\n{instruction}\n\nUser: {user_prompt.strip()}"
