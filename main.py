@@ -67,6 +67,13 @@ def run_pipeline() -> None:
 
     logger.info("Loaded %d tasks to process.", len(tasks))
     results = []
+    
+    total_tasks = len(tasks)
+    total_local_tasks = 0
+    total_cheap_remote_tasks = 0
+    total_expensive_remote_tasks = 0
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
 
     for index, task in enumerate(tasks):
         if not isinstance(task, dict):
@@ -93,49 +100,98 @@ def run_pipeline() -> None:
                 task_id, task_type.value
             )
 
-            # Step 2: Model Selection
-            model = model_selector.get_model_for_task(task_type)
+            # Dynamic time budget calculation
+            remaining_tasks = total_tasks - index
+            elapsed_time = time.perf_counter() - start_time
+            remaining_time = 58.0 - elapsed_time  # 60s total limit, with 2s safety buffer
+            time_required_for_local = 3.5 * remaining_tasks
 
-            # Step 3: Local reasoning hints (for Math/Logic tasks to save remote completion tokens)
-            hints = None
-            if task_type in {TaskType.MATH, TaskType.LOGIC} and gemma_client.is_available():
-                logger.info("Generating local reasoning hints using Gemma for task '%s'...", task_id)
-                hints = gemma_client.generate_reasoning_hints(prompt)
+            # Simple tasks are routed to local Gemma if budget allows
+            is_simple_task = task_type in {TaskType.SENTIMENT, TaskType.SUMMARY, TaskType.NER, TaskType.GENERAL}
 
-            # Step 4: Prompt Building (incorporating local hints if available)
-            prompt_str = build_prompt(prompt, task_type, hints=hints)
+            if is_simple_task and gemma_client.is_available() and remaining_time >= time_required_for_local:
+                # --- TIER 1: Local Gemma ---
+                logger.info(
+                    "Executing task '%s' LOCALLY using Gemma (Tier 1). Remaining time: %.1fs, Required: %.1fs (0 Fireworks tokens)",
+                    task_id, remaining_time, time_required_for_local
+                )
+                raw_output = gemma_client.generate_answer(prompt, task_type)
+                formatted_output = format_response(
+                    task_type=task_type,
+                    output=raw_output,
+                    requested_format=requested_format,
+                )
+                task_latency = time.perf_counter() - task_start
+                logger.info(
+                    "Task '%s' completed locally in %.3fs. Model: local-gemma. Tokens: 0 prompt, 0 completion.",
+                    task_id, task_latency
+                )
+                total_local_tasks += 1
+            else:
+                # Remote execution (Tier 2 or Tier 3)
+                # Step 2: Model Selection
+                model = model_selector.get_model_for_task(task_type)
+                
+                is_cheap_model = (model == model_selector.cheap_model)
+                if is_cheap_model:
+                    # --- TIER 2: Cheap Remote ---
+                    logger.info(
+                        "Routing task '%s' to CHEAP remote model '%s' (Tier 2).",
+                        task_id, model
+                    )
+                    total_cheap_remote_tasks += 1
+                else:
+                    # --- TIER 3: Capable Remote ---
+                    logger.info(
+                        "Routing task '%s' to CAPABLE remote model '%s' (Tier 3).",
+                        task_id, model
+                    )
+                    total_expensive_remote_tasks += 1
 
-            # Step 5: Call API Client
-            messages = [{"role": "user", "content": prompt_str}]
-            response_data = client.chat_completion(
-                model=model,
-                messages=messages,
-            )
+                # Step 3: Local reasoning hints (only for Math/Logic tasks to save remote completion tokens)
+                # Ensure we have enough time budget for reasoning hints (~1.5s per task)
+                hints = None
+                if (task_type in {TaskType.MATH, TaskType.LOGIC} and 
+                        gemma_client.is_available() and 
+                        (remaining_time >= time_required_for_local + 1.5)):
+                    logger.info("Generating local reasoning hints using Gemma for task '%s'...", task_id)
+                    hints = gemma_client.generate_reasoning_hints(prompt)
 
-            choices = response_data.get("choices", [])
-            if not choices:
-                raise RuntimeError("API returned response with no choices.")
+                # Step 4: Prompt Building (incorporating local hints if available)
+                prompt_str = build_prompt(prompt, task_type, hints=hints)
 
-            raw_output = choices[0].get("message", {}).get("content", "")
+                # Step 5: Call API Client
+                messages = [{"role": "user", "content": prompt_str}]
+                response_data = client.chat_completion(
+                    model=model,
+                    messages=messages,
+                )
 
-            # Step 6: Formatting Response
-            formatted_output = format_response(
-                task_type=task_type,
-                output=raw_output,
-                requested_format=requested_format,
-            )
+                choices = response_data.get("choices", [])
+                if not choices:
+                    raise RuntimeError("API returned response with no choices.")
 
-            # Record task metrics
-            task_latency = time.perf_counter() - task_start
-            usage = response_data.get("usage", {})
-            prompt_tokens = usage.get("prompt_tokens", 0)
-            completion_tokens = usage.get("completion_tokens", 0)
+                raw_output = choices[0].get("message", {}).get("content", "")
 
-            # Local execution log (not written to results.json)
-            logger.info(
-                "Task '%s' completed in %.3fs. Model: %s. Tokens: %d prompt, %d completion.",
-                task_id, task_latency, model, prompt_tokens, completion_tokens
-            )
+                # Step 6: Formatting Response
+                formatted_output = format_response(
+                    task_type=task_type,
+                    output=raw_output,
+                    requested_format=requested_format,
+                )
+
+                # Record task metrics
+                task_latency = time.perf_counter() - task_start
+                usage = response_data.get("usage", {})
+                prompt_tokens = usage.get("prompt_tokens", 0)
+                completion_tokens = usage.get("completion_tokens", 0)
+
+                logger.info(
+                    "Task '%s' completed remotely in %.3fs. Model: %s. Tokens: %d prompt, %d completion.",
+                    task_id, task_latency, model, prompt_tokens, completion_tokens
+                )
+                total_prompt_tokens += prompt_tokens
+                total_completion_tokens += completion_tokens
 
             results.append({
                 "task_id": task_id,
@@ -144,7 +200,6 @@ def run_pipeline() -> None:
 
         except Exception as exc:
             logger.error("Error processing task '%s': %s", task_id, exc)
-            # For unrecoverable execution failure, we terminate the process
             sys.exit(1)
 
     # Step 6: Write outputs
@@ -167,6 +222,24 @@ def run_pipeline() -> None:
         sys.exit(1)
 
     total_latency = time.perf_counter() - start_time
+    logger.info(
+        "Execution Summary:\n"
+        "  Total Tasks Processed: %d\n"
+        "  - Routed to Local Gemma (Tier 1): %d\n"
+        "  - Routed to Cheap Remote (Tier 2): %d\n"
+        "  - Routed to Capable Remote (Tier 3): %d\n"
+        "  Total Tokens Consumed:\n"
+        "    Prompt Tokens:     %d\n"
+        "    Completion Tokens: %d\n"
+        "    Total Tokens:      %d",
+        total_tasks,
+        total_local_tasks,
+        total_cheap_remote_tasks,
+        total_expensive_remote_tasks,
+        total_prompt_tokens,
+        total_completion_tokens,
+        total_prompt_tokens + total_completion_tokens
+    )
     logger.info("Pipeline completed successfully in %.3fs.", total_latency)
     sys.exit(0)
 

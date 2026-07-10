@@ -189,3 +189,117 @@ def test_pipeline_execution(tmp_path) -> None:
     assert len(results) == 2
     assert results[0]["task_id"] == "t1"
     assert results[1]["task_id"] == "t2"
+
+
+def test_gemma_client_generate_answer() -> None:
+    """Tests the generate_answer method of GemmaClient with a mock LLM."""
+    from agent.gemma_client import GemmaClient
+
+    with patch("agent.gemma_client.Llama") as mock_llama_class:
+        mock_llama_instance = MagicMock()
+        mock_llama_instance.return_value = {
+            "choices": [{"text": "Positive: It's good"}]
+        }
+        mock_llama_class.return_value = mock_llama_instance
+
+        client = GemmaClient(model_path="dummy.gguf")
+        client.llm = mock_llama_instance
+
+        ans = client.generate_answer("Good stuff", "SENTIMENT")
+        assert ans == "Positive: It's good"
+        assert mock_llama_instance.called
+
+
+@patch("main.GemmaClient")
+def test_pipeline_time_budgeted_routing_local(mock_gemma_client_class, tmp_path) -> None:
+    """Tests that a simple task is executed locally when time budget is sufficient."""
+    mock_gemma_instance = MagicMock()
+    mock_gemma_instance.is_available.return_value = True
+    mock_gemma_instance.generate_answer.return_value = "Positive: Great product!"
+    mock_gemma_client_class.return_value = mock_gemma_instance
+
+    input_file = tmp_path / "tasks.json"
+    output_file = tmp_path / "results.json"
+
+    tasks = [
+        {"task_id": "t1", "prompt": "Classify sentiment: Great product!", "category": "SENTIMENT"},
+    ]
+
+    with open(input_file, "w", encoding="utf-8") as f:
+        json.dump(tasks, f)
+
+    env = {
+        "FIREWORKS_API_KEY": "test_key",
+        "FIREWORKS_BASE_URL": "https://api.test",
+        "ALLOWED_MODELS": "cheap,expensive",
+        "INPUT_FILE": str(input_file),
+        "OUTPUT_FILE": str(output_file),
+    }
+
+    # Mock time.perf_counter to return 0.0, so remaining time = 58s, required time = 3.5s
+    with patch.dict(os.environ, env), \
+         patch("time.perf_counter", return_value=0.0), \
+         pytest.raises(SystemExit) as excinfo:
+        run_pipeline()
+
+    assert excinfo.value.code == 0
+    assert os.path.exists(output_file)
+    with open(output_file, "r", encoding="utf-8") as f:
+        results = json.load(f)
+    assert len(results) == 1
+    assert results[0]["task_id"] == "t1"
+    assert "Positive" in results[0]["answer"]
+    mock_gemma_instance.generate_answer.assert_called_once()
+
+
+@patch("main.GemmaClient")
+def test_pipeline_time_budgeted_routing_remote_fallback(mock_gemma_client_class, tmp_path) -> None:
+    """Tests that a simple task falls back to remote when time budget is low."""
+    mock_gemma_instance = MagicMock()
+    mock_gemma_instance.is_available.return_value = True
+    mock_gemma_client_class.return_value = mock_gemma_instance
+
+    input_file = tmp_path / "tasks.json"
+    output_file = tmp_path / "results.json"
+
+    tasks = [
+        {"task_id": "t1", "prompt": "Classify sentiment: Great product!", "category": "SENTIMENT"},
+    ]
+
+    with open(input_file, "w", encoding="utf-8") as f:
+        json.dump(tasks, f)
+
+    env = {
+        "FIREWORKS_API_KEY": "test_key",
+        "FIREWORKS_BASE_URL": "https://api.test",
+        "ALLOWED_MODELS": "cheap,expensive",
+        "INPUT_FILE": str(input_file),
+        "OUTPUT_FILE": str(output_file),
+    }
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": "Positive: Great!"}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+    }
+
+    # First call returns 0.0 (start_time), all subsequent calls return 56.0
+    calls = []
+    def dynamic_counter():
+        if not calls:
+            calls.append(1)
+            return 0.0
+        return 56.0
+
+    with patch.dict(os.environ, env), \
+         patch("time.perf_counter", side_effect=dynamic_counter), \
+         patch.object(requests.Session, "post", return_value=mock_resp) as mock_post, \
+         pytest.raises(SystemExit) as excinfo:
+        run_pipeline()
+
+    assert excinfo.value.code == 0
+    mock_gemma_instance.generate_answer.assert_not_called()
+    assert mock_post.call_count == 1
+
+
